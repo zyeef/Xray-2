@@ -1,0 +1,26 @@
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "MIT"
+
+[[mods]]
+modId = "xrayhelper"
+version = "1.1.0"
+displayName = "Xray Helper"
+description = "Xray configuravel. X liga/desliga, K abre o menu."
+
+[[mixins]]
+config = "xrayhelper.mixins.json"
+
+[[dependencies.xrayhelper]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1,)"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.xrayhelper]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1,1.22)"
+ordering = "NONE"
+side = "CLIENT"
