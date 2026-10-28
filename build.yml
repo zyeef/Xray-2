@@ -1,0 +1,698 @@
+name: build
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: 8.10.2 }
+      - name: Criar projeto
+        run: |
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'java'
+              id 'net.neoforged.moddev' version '2.0.78'
+          }
+          version = '1.1.0'
+          group = 'com.example.xray'
+          base { archivesName = 'xrayhelper' }
+          java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+          tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+          neoForge {
+              version = '21.1.172'
+              runs { client { client() } }
+              mods { xrayhelper { sourceSet sourceSets.main } }
+          }
+          repositories { mavenCentral() }
+          EOF
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  gradlePluginPortal()
+                  maven { url = 'https://maven.neoforged.net/releases' }
+              }
+          }
+          rootProject.name = 'xrayhelper'
+          EOF
+
+          mkdir -p src/main/java/com/example/xray
+          cat > src/main/java/com/example/xray/OreType.java <<'EOF'
+          package com.example.xray;
+
+          import net.minecraft.tags.BlockTags;
+          import net.minecraft.world.level.block.Blocks;
+          import net.minecraft.world.level.block.state.BlockState;
+          import net.neoforged.neoforge.common.Tags;
+
+          import java.util.function.Predicate;
+
+          public enum OreType {
+              COAL("Carvão", s -> s.is(BlockTags.COAL_ORES)),
+              IRON("Ferro", s -> s.is(BlockTags.IRON_ORES)),
+              COPPER("Cobre", s -> s.is(BlockTags.COPPER_ORES)),
+              GOLD("Ouro", s -> s.is(BlockTags.GOLD_ORES)),
+              REDSTONE("Redstone", s -> s.is(BlockTags.REDSTONE_ORES)),
+              LAPIS("Lápis-lazúli", s -> s.is(BlockTags.LAPIS_ORES)),
+              DIAMOND("Diamante", s -> s.is(BlockTags.DIAMOND_ORES)),
+              EMERALD("Esmeralda", s -> s.is(BlockTags.EMERALD_ORES)),
+              QUARTZ("Quartzo", s -> s.is(Blocks.NETHER_QUARTZ_ORE)),
+              NETHER_GOLD("Ouro do Nether", s -> s.is(Blocks.NETHER_GOLD_ORE)),
+              DEBRIS("Detrito antigo", s -> s.is(Blocks.ANCIENT_DEBRIS)),
+              OTHER("Outros (mods)", s -> false);
+
+              public final String label;
+              private final Predicate<BlockState> matcher;
+              public boolean enabled = true;
+
+              OreType(String label, Predicate<BlockState> matcher) {
+                  this.label = label;
+                  this.matcher = matcher;
+              }
+
+              /** Retorna o tipo de minério do bloco, ou null se não for minério. */
+              public static OreType of(BlockState s) {
+                  for (OreType t : values()) {
+                      if (t != OTHER && t.matcher.test(s)) return t;
+                  }
+                  if (s.is(Tags.Blocks.ORES)) return OTHER;
+                  return null;
+              }
+          }
+          EOF
+
+          mkdir -p src/main/java/com/example/xray
+          cat > src/main/java/com/example/xray/XrayConfig.java <<'EOF'
+          package com.example.xray;
+
+          import net.neoforged.fml.loading.FMLPaths;
+
+          import java.io.IOException;
+          import java.io.Reader;
+          import java.io.Writer;
+          import java.nio.charset.StandardCharsets;
+          import java.nio.file.Files;
+          import java.nio.file.Path;
+          import java.util.Properties;
+
+          public final class XrayConfig {
+              /** Alcance em blocos (16 a 256). */
+              public static int range = 64;
+              public static boolean unlimited = false;
+              /** 0 = blocos escondidos invisíveis, 100 = normais. */
+              public static int hiddenVisibility = 0;
+              public static boolean showWater = false;
+              public static boolean showLava = true;
+              public static boolean nightVision = true;
+
+              private XrayConfig() {}
+
+              private static Path file() {
+                  return FMLPaths.CONFIGDIR.get().resolve("xrayhelper-client.properties");
+              }
+
+              private static int clamp(int v, int min, int max) {
+                  return Math.max(min, Math.min(max, v));
+              }
+
+              private static int parseInt(String s, int def) {
+                  try {
+                      return s == null ? def : Integer.parseInt(s.trim());
+                  } catch (NumberFormatException e) {
+                      return def;
+                  }
+              }
+
+              public static void load() {
+                  Path f = file();
+                  if (!Files.exists(f)) return;
+                  Properties p = new Properties();
+                  try (Reader r = Files.newBufferedReader(f, StandardCharsets.UTF_8)) {
+                      p.load(r);
+                  } catch (IOException e) {
+                      return;
+                  }
+                  range = clamp(parseInt(p.getProperty("range"), range), 16, 256);
+                  unlimited = Boolean.parseBoolean(p.getProperty("unlimited", "false"));
+                  hiddenVisibility = clamp(parseInt(p.getProperty("hiddenVisibility"), hiddenVisibility), 0, 100);
+                  showWater = Boolean.parseBoolean(p.getProperty("showWater", "false"));
+                  showLava = Boolean.parseBoolean(p.getProperty("showLava", "true"));
+                  nightVision = Boolean.parseBoolean(p.getProperty("nightVision", "true"));
+                  for (OreType t : OreType.values()) {
+                      t.enabled = Boolean.parseBoolean(p.getProperty("ore." + t.name(), "true"));
+                  }
+              }
+
+              public static void save() {
+                  Properties p = new Properties();
+                  p.setProperty("range", Integer.toString(range));
+                  p.setProperty("unlimited", Boolean.toString(unlimited));
+                  p.setProperty("hiddenVisibility", Integer.toString(hiddenVisibility));
+                  p.setProperty("showWater", Boolean.toString(showWater));
+                  p.setProperty("showLava", Boolean.toString(showLava));
+                  p.setProperty("nightVision", Boolean.toString(nightVision));
+                  for (OreType t : OreType.values()) {
+                      p.setProperty("ore." + t.name(), Boolean.toString(t.enabled));
+                  }
+                  try (Writer w = Files.newBufferedWriter(file(), StandardCharsets.UTF_8)) {
+                      p.store(w, "Xray Helper");
+                  } catch (IOException ignored) {
+                  }
+              }
+          }
+          EOF
+
+          mkdir -p src/main/java/com/example/xray
+          cat > src/main/java/com/example/xray/XrayConfigScreen.java <<'EOF'
+          package com.example.xray;
+
+          import net.minecraft.ChatFormatting;
+          import net.minecraft.client.gui.GuiGraphics;
+          import net.minecraft.client.gui.components.AbstractSliderButton;
+          import net.minecraft.client.gui.components.Button;
+          import net.minecraft.client.gui.screens.Screen;
+          import net.minecraft.network.chat.CommonComponents;
+          import net.minecraft.network.chat.Component;
+
+          import java.util.function.BooleanSupplier;
+          import java.util.function.Consumer;
+          import java.util.function.IntConsumer;
+          import java.util.function.IntFunction;
+
+          public class XrayConfigScreen extends Screen {
+              private final Screen parent;
+              private int page = 0;
+
+              public XrayConfigScreen(Screen parent) {
+                  super(Component.literal("Xray Helper"));
+                  this.parent = parent;
+              }
+
+              @Override
+              protected void init() {
+                  int cx = this.width / 2;
+                  int left = cx - 155;
+                  int right = cx + 5;
+                  int w = 150;
+
+                  addRenderableWidget(Button.builder(
+                          Component.literal(page == 0 ? "> Geral <" : "Geral"),
+                          b -> { page = 0; rebuildWidgets(); }).bounds(left, 28, w, 20).build());
+                  addRenderableWidget(Button.builder(
+                          Component.literal(page == 1 ? "> Minérios <" : "Minérios"),
+                          b -> { page = 1; rebuildWidgets(); }).bounds(right, 28, w, 20).build());
+
+                  if (page == 0) {
+                      IntSlider range = new IntSlider(left, 56, w, 20, "Alcance", 16, 256, 16, XrayConfig.range,
+                              v -> v + " blocos", v -> XrayConfig.range = v);
+                      range.active = !XrayConfig.unlimited;
+                      addRenderableWidget(range);
+
+                      addRenderableWidget(toggle(right, 56, w, "Ilimitado",
+                              () -> XrayConfig.unlimited,
+                              v -> XrayConfig.unlimited = v,
+                              this::rebuildWidgets));
+
+                      addRenderableWidget(new IntSlider(left, 80, 310, 20, "Blocos escondidos", 0, 100, 5,
+                              XrayConfig.hiddenVisibility, v -> v + "%", v -> XrayConfig.hiddenVisibility = v));
+
+                      addRenderableWidget(toggle(left, 104, w, "Água",
+                              () -> XrayConfig.showWater, v -> XrayConfig.showWater = v, null));
+                      addRenderableWidget(toggle(right, 104, w, "Lava",
+                              () -> XrayConfig.showLava, v -> XrayConfig.showLava = v, null));
+                      addRenderableWidget(toggle(left, 128, w, "Visão noturna",
+                              () -> XrayConfig.nightVision, v -> XrayConfig.nightVision = v, null));
+                  } else {
+                      OreType[] types = OreType.values();
+                      for (int i = 0; i < types.length; i++) {
+                          OreType t = types[i];
+                          int x = (i % 2 == 0) ? left : right;
+                          int y = 56 + (i / 2) * 24;
+                          addRenderableWidget(toggle(x, y, w, t.label, () -> t.enabled, v -> t.enabled = v, null));
+                      }
+                  }
+
+                  addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, b -> onClose())
+                          .bounds(cx - 100, this.height - 28, 200, 20).build());
+              }
+
+              private static Component toggleText(String label, boolean on) {
+                  return Component.literal(label + ": ").append(
+                          Component.literal(on ? "ON" : "OFF").withStyle(on ? ChatFormatting.GREEN : ChatFormatting.RED));
+              }
+
+              private static Button toggle(int x, int y, int w, String label, BooleanSupplier get,
+                                           Consumer<Boolean> set, Runnable after) {
+                  return Button.builder(toggleText(label, get.getAsBoolean()), b -> {
+                      set.accept(!get.getAsBoolean());
+                      b.setMessage(toggleText(label, get.getAsBoolean()));
+                      if (after != null) after.run();
+                  }).bounds(x, y, w, 20).build();
+              }
+
+              @Override
+              public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+                  super.render(g, mouseX, mouseY, partialTick);
+                  g.drawCenteredString(this.font, this.title, this.width / 2, 12, 0xFFFFFF);
+                  if (page == 0) {
+                      g.drawCenteredString(this.font,
+                              Component.literal("Blocos escondidos: 0% = invisíveis, 100% = normais (efeito pontilhado)"),
+                              this.width / 2, 156, 0xAAAAAA);
+                  }
+              }
+
+              @Override
+              public void onClose() {
+                  this.minecraft.setScreen(this.parent);
+              }
+
+              @Override
+              public void removed() {
+                  XrayConfig.save();
+                  if (XrayState.enabled) XrayMod.refresh();
+              }
+
+              private static class IntSlider extends AbstractSliderButton {
+                  private final String label;
+                  private final int min, max, step;
+                  private final IntFunction<String> fmt;
+                  private final IntConsumer onChange;
+
+                  IntSlider(int x, int y, int w, int h, String label, int min, int max, int step, int value,
+                            IntFunction<String> fmt, IntConsumer onChange) {
+                      super(x, y, w, h, Component.empty(), (double) (value - min) / (double) (max - min));
+                      this.label = label;
+                      this.min = min;
+                      this.max = max;
+                      this.step = step;
+                      this.fmt = fmt;
+                      this.onChange = onChange;
+                      updateMessage();
+                  }
+
+                  private int current() {
+                      int v = min + (int) Math.round(this.value * (max - min) / (double) step) * step;
+                      return Math.max(min, Math.min(max, v));
+                  }
+
+                  @Override
+                  protected void updateMessage() {
+                      if (fmt == null) return;
+                      setMessage(Component.literal(label + ": " + fmt.apply(current())));
+                  }
+
+                  @Override
+                  protected void applyValue() {
+                      onChange.accept(current());
+                  }
+              }
+          }
+          EOF
+
+          mkdir -p src/main/java/com/example/xray
+          cat > src/main/java/com/example/xray/XrayMod.java <<'EOF'
+          package com.example.xray;
+
+          import com.mojang.blaze3d.platform.InputConstants;
+          import net.minecraft.client.KeyMapping;
+          import net.minecraft.client.Minecraft;
+          import net.minecraft.core.BlockPos;
+          import net.minecraft.network.chat.Component;
+          import net.minecraft.world.effect.MobEffectInstance;
+          import net.minecraft.world.effect.MobEffects;
+          import net.neoforged.api.distmarker.Dist;
+          import net.neoforged.bus.api.IEventBus;
+          import net.neoforged.bus.api.SubscribeEvent;
+          import net.neoforged.fml.common.EventBusSubscriber;
+          import net.neoforged.fml.common.Mod;
+          import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
+          import net.neoforged.neoforge.client.event.ClientTickEvent;
+          import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
+          import net.neoforged.neoforge.client.settings.KeyConflictContext;
+          import org.lwjgl.glfw.GLFW;
+
+          @Mod(value = XrayMod.MODID, dist = Dist.CLIENT)
+          public class XrayMod {
+              public static final String MODID = "xrayhelper";
+
+              public static final KeyMapping TOGGLE = new KeyMapping(
+                      "key.xrayhelper.toggle",
+                      KeyConflictContext.IN_GAME,
+                      InputConstants.Type.KEYSYM,
+                      GLFW.GLFW_KEY_X,
+                      "key.categories.xrayhelper");
+
+              public static final KeyMapping CONFIG = new KeyMapping(
+                      "key.xrayhelper.config",
+                      KeyConflictContext.IN_GAME,
+                      InputConstants.Type.KEYSYM,
+                      GLFW.GLFW_KEY_K,
+                      "key.categories.xrayhelper");
+
+              private static boolean nvAdded = false;
+
+              public XrayMod(IEventBus modBus) {
+                  XrayConfig.load();
+                  modBus.addListener(XrayMod::registerKeys);
+              }
+
+              private static void registerKeys(RegisterKeyMappingsEvent event) {
+                  event.register(TOGGLE);
+                  event.register(CONFIG);
+              }
+
+              /** Recentraliza no jogador e reconstrói todos os chunks. */
+              public static void refresh() {
+                  Minecraft mc = Minecraft.getInstance();
+                  if (mc.level == null || mc.player == null) return;
+                  BlockPos bp = mc.player.blockPosition();
+                  XrayState.cx = bp.getX() >> 4;
+                  XrayState.cy = bp.getY() >> 4;
+                  XrayState.cz = bp.getZ() >> 4;
+                  XrayState.clearCache();
+                  mc.levelRenderer.allChanged();
+              }
+
+              @EventBusSubscriber(modid = MODID, value = Dist.CLIENT)
+              public static class Events {
+
+                  @SubscribeEvent
+                  public static void onLogin(ClientPlayerNetworkEvent.LoggingIn event) {
+                      XrayState.enabled = false;
+                      XrayState.clearCache();
+                      nvAdded = false;
+                  }
+
+                  @SubscribeEvent
+                  public static void onTick(ClientTickEvent.Post event) {
+                      Minecraft mc = Minecraft.getInstance();
+                      if (mc.player == null || mc.level == null) return;
+
+                      while (TOGGLE.consumeClick()) {
+                          XrayState.enabled = !XrayState.enabled;
+                          refresh();
+                          mc.player.displayClientMessage(
+                                  Component.literal("Xray: " + (XrayState.enabled ? "ON" : "OFF")), true);
+                      }
+
+                      while (CONFIG.consumeClick()) {
+                          mc.setScreen(new XrayConfigScreen(null));
+                      }
+
+                      if (XrayState.enabled && !XrayConfig.unlimited) {
+                          updateCenter(mc);
+                      }
+
+                      boolean wantNv = XrayState.enabled && XrayConfig.nightVision;
+                      if (wantNv) {
+                          if (!mc.player.hasEffect(MobEffects.NIGHT_VISION)) {
+                              mc.player.addEffect(new MobEffectInstance(MobEffects.NIGHT_VISION, -1, 0, false, false, false));
+                              nvAdded = true;
+                          }
+                      } else if (nvAdded) {
+                          mc.player.removeEffect(MobEffects.NIGHT_VISION);
+                          nvAdded = false;
+                      }
+                  }
+
+                  /** Quando o jogador troca de seção, só reconstrói as seções que entraram/saíram do alcance. */
+                  private static void updateCenter(Minecraft mc) {
+                      BlockPos bp = mc.player.blockPosition();
+                      int nx = bp.getX() >> 4;
+                      int ny = bp.getY() >> 4;
+                      int nz = bp.getZ() >> 4;
+                      int ox = XrayState.cx;
+                      int oy = XrayState.cy;
+                      int oz = XrayState.cz;
+                      if (nx == ox && ny == oy && nz == oz) return;
+
+                      XrayState.cx = nx;
+                      XrayState.cy = ny;
+                      XrayState.cz = nz;
+
+                      int r = XrayState.radius();
+                      int minY = mc.level.getMinSection();
+                      int maxY = mc.level.getMaxSection() - 1;
+                      int yFrom = Math.max(minY, Math.min(oy, ny) - r);
+                      int yTo = Math.min(maxY, Math.max(oy, ny) + r);
+
+                      for (int x = Math.min(ox, nx) - r; x <= Math.max(ox, nx) + r; x++) {
+                          for (int z = Math.min(oz, nz) - r; z <= Math.max(oz, nz) + r; z++) {
+                              for (int y = yFrom; y <= yTo; y++) {
+                                  boolean inOld = Math.abs(x - ox) <= r && Math.abs(y - oy) <= r && Math.abs(z - oz) <= r;
+                                  boolean inNew = Math.abs(x - nx) <= r && Math.abs(y - ny) <= r && Math.abs(z - nz) <= r;
+                                  if (inOld != inNew) {
+                                      mc.levelRenderer.setSectionDirty(x, y, z);
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
+
+          mkdir -p src/main/java/com/example/xray
+          cat > src/main/java/com/example/xray/XrayState.java <<'EOF'
+          package com.example.xray;
+
+          import net.minecraft.core.BlockPos;
+          import net.minecraft.tags.BlockTags;
+          import net.minecraft.world.level.BlockGetter;
+          import net.minecraft.world.level.block.Block;
+          import net.minecraft.world.level.block.Blocks;
+          import net.minecraft.world.level.block.state.BlockState;
+
+          import java.util.Map;
+          import java.util.concurrent.ConcurrentHashMap;
+
+          public final class XrayState {
+              public static volatile boolean enabled = false;
+              /** Seção (16x16x16) onde o jogador estava na última reconstrução. */
+              public static volatile int cx, cy, cz;
+
+              private enum Kind { NONE, FILLER, ORE }
+
+              private record Cls(Kind kind, OreType ore) {}
+
+              private static final Cls NONE = new Cls(Kind.NONE, null);
+              private static final Cls FILLER = new Cls(Kind.FILLER, null);
+              private static final Map<Block, Cls> CACHE = new ConcurrentHashMap<>();
+
+              private XrayState() {}
+
+              public static void clearCache() {
+                  CACHE.clear();
+              }
+
+              private static Cls classify(BlockState s) {
+                  Block b = s.getBlock();
+                  Cls c = CACHE.get(b);
+                  if (c == null) {
+                      OreType ore = OreType.of(s);
+                      if (ore != null) c = new Cls(Kind.ORE, ore);
+                      else if (isFiller(s)) c = FILLER;
+                      else c = NONE;
+                      CACHE.put(b, c);
+                  }
+                  return c;
+              }
+
+              private static boolean isFiller(BlockState s) {
+                  return s.is(BlockTags.BASE_STONE_OVERWORLD)
+                          || s.is(BlockTags.BASE_STONE_NETHER)
+                          || s.is(BlockTags.DIRT)
+                          || s.is(BlockTags.SAND)
+                          || s.is(Blocks.GRAVEL)
+                          || s.is(Blocks.CLAY)
+                          || s.is(Blocks.TUFF)
+                          || s.is(Blocks.DRIPSTONE_BLOCK)
+                          || s.is(Blocks.CALCITE)
+                          || s.is(Blocks.BASALT)
+                          || s.is(Blocks.SMOOTH_BASALT)
+                          || s.is(Blocks.BLACKSTONE)
+                          || s.is(Blocks.SOUL_SAND)
+                          || s.is(Blocks.SOUL_SOIL)
+                          || s.is(Blocks.END_STONE);
+              }
+
+              /** Raio em seções (16 blocos cada) a partir do alcance configurado. */
+              public static int radius() {
+                  return (XrayConfig.range + 15) >> 4;
+              }
+
+              public static boolean inRange(BlockPos p) {
+                  if (XrayConfig.unlimited) return true;
+                  int r = radius();
+                  return Math.abs((p.getX() >> 4) - cx) <= r
+                          && Math.abs((p.getY() >> 4) - cy) <= r
+                          && Math.abs((p.getZ() >> 4) - cz) <= r;
+              }
+
+              /** Padrão pontilhado estável: decide quais blocos escondidos ficam "fantasmas". */
+              private static boolean stipple(BlockPos p) {
+                  int h = p.getX() * 73856093 ^ p.getY() * 19349663 ^ p.getZ() * 83492791;
+                  h ^= (h >>> 16);
+                  h *= 0x45d9f3b;
+                  h ^= (h >>> 16);
+                  return Math.floorMod(h, 100) < XrayConfig.hiddenVisibility;
+              }
+
+              private static boolean isHiddenKind(Cls c) {
+                  return c.kind == Kind.FILLER || (c.kind == Kind.ORE && !c.ore.enabled);
+              }
+
+              /**
+               * TRUE = força desenhar a face, FALSE = força não desenhar, null = comportamento normal.
+               */
+              public static Boolean decide(BlockState s, BlockGetter level, BlockPos pos, BlockPos neighborPos) {
+                  Cls c = classify(s);
+                  if (c.kind == Kind.NONE) return null;
+                  if (!inRange(pos)) return null;
+                  if (c.kind == Kind.ORE && c.ore.enabled) return Boolean.TRUE;
+
+                  // bloco escondido (enchimento ou minério desligado)
+                  int vis = XrayConfig.hiddenVisibility;
+                  if (vis <= 0) return Boolean.FALSE;
+                  if (vis >= 100) return null;
+                  if (!stipple(pos)) return Boolean.FALSE;
+
+                  // bloco "fantasma": não desenha a face entre dois fantasmas vizinhos
+                  Cls n = classify(level.getBlockState(neighborPos));
+                  if (isHiddenKind(n) && stipple(neighborPos)) return Boolean.FALSE;
+                  return Boolean.TRUE;
+              }
+          }
+          EOF
+
+          mkdir -p src/main/java/com/example/xray/mixin
+          cat > src/main/java/com/example/xray/mixin/BlockMixin.java <<'EOF'
+          package com.example.xray.mixin;
+
+          import com.example.xray.XrayState;
+          import net.minecraft.core.BlockPos;
+          import net.minecraft.core.Direction;
+          import net.minecraft.world.level.BlockGetter;
+          import net.minecraft.world.level.block.Block;
+          import net.minecraft.world.level.block.state.BlockState;
+          import org.spongepowered.asm.mixin.Mixin;
+          import org.spongepowered.asm.mixin.injection.At;
+          import org.spongepowered.asm.mixin.injection.Inject;
+          import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+          @Mixin(Block.class)
+          public abstract class BlockMixin {
+
+              @Inject(method = "shouldRenderFace", at = @At("HEAD"), cancellable = true)
+              private static void xray$shouldRenderFace(BlockState state, BlockGetter level, BlockPos pos,
+                                                        Direction face, BlockPos relativePos,
+                                                        CallbackInfoReturnable<Boolean> cir) {
+                  if (!XrayState.enabled) return;
+                  Boolean r = XrayState.decide(state, level, pos, relativePos);
+                  if (r != null) cir.setReturnValue(r);
+              }
+          }
+          EOF
+
+          mkdir -p src/main/java/com/example/xray/mixin
+          cat > src/main/java/com/example/xray/mixin/LiquidMixin.java <<'EOF'
+          package com.example.xray.mixin;
+
+          import com.example.xray.XrayConfig;
+          import com.example.xray.XrayState;
+          import com.mojang.blaze3d.vertex.VertexConsumer;
+          import net.minecraft.client.renderer.block.LiquidBlockRenderer;
+          import net.minecraft.core.BlockPos;
+          import net.minecraft.tags.FluidTags;
+          import net.minecraft.world.level.BlockAndTintGetter;
+          import net.minecraft.world.level.block.state.BlockState;
+          import net.minecraft.world.level.material.FluidState;
+          import org.spongepowered.asm.mixin.Mixin;
+          import org.spongepowered.asm.mixin.injection.At;
+          import org.spongepowered.asm.mixin.injection.Inject;
+          import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+          @Mixin(LiquidBlockRenderer.class)
+          public abstract class LiquidMixin {
+
+              // require = 0: se algo não bater, só desativa o esconder água/lava em vez de crashar
+              @Inject(method = "tesselate", at = @At("HEAD"), cancellable = true, require = 0)
+              private void xray$tesselate(BlockAndTintGetter level, BlockPos pos, VertexConsumer buffer,
+                                          BlockState blockState, FluidState fluidState, CallbackInfo ci) {
+                  if (!XrayState.enabled) return;
+                  if (!XrayState.inRange(pos)) return;
+                  if (fluidState.is(FluidTags.WATER) && !XrayConfig.showWater) {
+                      ci.cancel();
+                  } else if (fluidState.is(FluidTags.LAVA) && !XrayConfig.showLava) {
+                      ci.cancel();
+                  }
+              }
+          }
+          EOF
+
+          mkdir -p src/main/resources/META-INF
+          cat > src/main/resources/META-INF/neoforge.mods.toml <<'EOF'
+          modLoader = "javafml"
+          loaderVersion = "[4,)"
+          license = "MIT"
+
+          [[mods]]
+          modId = "xrayhelper"
+          version = "1.1.0"
+          displayName = "Xray Helper"
+          description = "Xray configuravel. X liga/desliga, K abre o menu."
+
+          [[mixins]]
+          config = "xrayhelper.mixins.json"
+
+          [[dependencies.xrayhelper]]
+          modId = "neoforge"
+          type = "required"
+          versionRange = "[21.1,)"
+          ordering = "NONE"
+          side = "CLIENT"
+
+          [[dependencies.xrayhelper]]
+          modId = "minecraft"
+          type = "required"
+          versionRange = "[1.21.1,1.22)"
+          ordering = "NONE"
+          side = "CLIENT"
+          EOF
+
+          mkdir -p src/main/resources/assets/xrayhelper/lang
+          cat > src/main/resources/assets/xrayhelper/lang/en_us.json <<'EOF'
+          {
+            "key.xrayhelper.toggle": "Toggle Xray",
+            "key.xrayhelper.config": "Open Xray Settings",
+            "key.categories.xrayhelper": "Xray Helper"
+          }
+          EOF
+
+          mkdir -p src/main/resources/assets/xrayhelper/lang
+          cat > src/main/resources/assets/xrayhelper/lang/pt_br.json <<'EOF'
+          {
+            "key.xrayhelper.toggle": "Ligar/desligar Xray",
+            "key.xrayhelper.config": "Abrir configuracoes do Xray",
+            "key.categories.xrayhelper": "Xray Helper"
+          }
+          EOF
+
+          mkdir -p src/main/resources
+          cat > src/main/resources/xrayhelper.mixins.json <<'EOF'
+          {
+            "required": true,
+            "package": "com.example.xray.mixin",
+            "compatibilityLevel": "JAVA_21",
+            "client": ["BlockMixin", "LiquidMixin"],
+            "injectors": { "defaultRequire": 1 }
+          }
+          EOF
+
+      - run: gradle build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xrayhelper
+          path: build/libs/*.jar
